@@ -30,7 +30,7 @@
 </p>
 
 ```bash
-# No network. One repo. Full tools.
+# Skip every permission prompt. It still can't reach the network or leave this repo.
 BELAY_NETWORK_MODE=sandbox \
 BELAY_WORKSPACE_GUARD=on \
 BELAY_ALLOWED_ROOTS="$HOME/Github/my-app" \
