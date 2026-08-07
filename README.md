@@ -1,12 +1,33 @@
-# Belay
-
 <p align="center">
-  <img src="assets/climber.png" alt="Climber" width="96" />
+  <img src="assets/climber.png" alt="Belay" width="96" />
 </p>
 
-Make your agent's worst day survivable.
+<h1 align="center">Belay</h1>
 
-YOLO mode, on belay. Set limits on the agent instead of relying on the model's judgment about what's safe. Works with Claude Code, Pi, and Grok Build.
+<p align="center">
+  <strong>Make your agent's worst day survivable.</strong>
+</p>
+
+<p align="center">
+  YOLO mode, on belay. Set limits on the agent instead of relying on the<br>
+  model's judgment about what's safe. Works with Claude Code, Pi, and Grok Build.
+</p>
+
+<p align="center">
+  <a href="https://github.com/derek-larson14/belay/stargazers"><img src="https://img.shields.io/github/stars/derek-larson14/belay?style=flat&color=yellow" alt="Stars"></a>
+  <a href="#platform-support"><img src="https://img.shields.io/badge/works_with-Claude_Code_·_Pi_·_Grok-orange?style=flat" alt="Works with Claude Code, Pi, Grok Build"></a>
+  <a href="https://github.com/derek-larson14/belay/commits/main"><img src="https://img.shields.io/github/last-commit/derek-larson14/belay?style=flat" alt="Last commit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/derek-larson14/belay?style=flat" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="#why-it-exists">Why</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#what-it-blocks">What it blocks</a> ·
+  <a href="#per-session-overrides">Per-session</a> ·
+  <a href="#configuration">Config</a> ·
+  <a href="#limitations">Limitations</a>
+</p>
 
 ```bash
 # No network. One repo. Full tools.
