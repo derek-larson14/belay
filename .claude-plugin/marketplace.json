@@ -1,15 +1,15 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-guard",
-  "description": "Security hooks for Claude Code — block credential theft, network exfiltration, and persistence attacks",
+  "name": "belay",
+  "description": "Hard limits for coding agents \u2014 block credential theft, network exfiltration, and persistence attacks across Claude Code, Pi, and Grok Build",
   "owner": {
     "name": "derek-larson14",
     "email": "derek-larson14@users.noreply.github.com"
   },
   "plugins": [
     {
-      "name": "claude-guard",
-      "description": "Security hooks that block access to credentials, browser sessions, keychains, and clipboard. Sandboxes network access from Bash. Blocks persistence mechanisms.",
+      "name": "belay",
+      "description": "Hard limits for coding agents. Blocks access to credentials, browser sessions, keychains, and clipboard. Sandboxes network access from Bash. Blocks persistence mechanisms.",
       "author": {
         "name": "derek-larson14"
       },

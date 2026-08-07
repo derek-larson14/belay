@@ -5,51 +5,24 @@
 # Register as PostToolUse hook on * (all tools).
 #
 # Config sources (in priority order):
-#   1. CLAUDE_GUARD_AUDIT_PATH env var
-#   2. [audit-log] path in claude-guard.toml
-#   3. Default: ~/.claude/logs/claude-audit.jsonl
+#   1. BELAY_AUDIT_PATH env var
+#   2. [audit-log] path in .belay.toml / ~/.belay/config.toml
+#   3. Default: ~/.belay/audit.jsonl
 
 INPUT=$(cat)
 
-# --- Find config file (same logic as dispatcher) ---
-find_config() {
-  local project="${CLAUDE_PROJECT_DIR:-.}/.claude/claude-guard.toml"
-  local global="$HOME/.config/claude-guard/config.toml"
-  local script_dir="$(cd "$(dirname "$0")" && pwd)"
-  local bundled="$script_dir/claude-guard.toml"
-
-  for f in "$project" "$global" "$bundled"; do
-    [ -f "$f" ] && echo "$f" && return
-  done
-}
-
-get_config_value() {
-  local config="$1" section="$2" key="$3" default="$4"
-  [ -z "$config" ] && echo "$default" && return
-  awk -v sect="[$section]" -v k="$key" -v def="$default" '
-    $0 == sect { in_s=1; next }
-    /^\[/ { in_s=0 }
-    in_s && $1 == k {
-      sub(/^[^=]*=[ \t]*/, "")
-      gsub(/"/, "")
-      print
-      found=1
-      exit
-    }
-    END { if (!found) print def }
-  ' "$config"
-}
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/core/config.sh"
 
 # --- Resolve log path ---
-CONFIG_FILE=$(find_config)
-LOG_PATH="${CLAUDE_GUARD_AUDIT_PATH:-$(get_config_value "$CONFIG_FILE" "audit-log" "path" "$HOME/.claude/logs/claude-audit.jsonl")}"
+LOG_PATH="${BELAY_AUDIT_PATH:-$(belay_config "audit-log" "path" "$(belay_home)/audit.jsonl")}"
 
 # Expand ~ to $HOME (for user-provided paths in toml or env var)
 LOG_PATH="${LOG_PATH/#\~\//$HOME/}"
 
 # Make path absolute if relative
 if [[ "$LOG_PATH" != /* ]]; then
-  LOG_PATH="$HOME/.claude/logs/$LOG_PATH"
+  LOG_PATH="$(belay_home)/$LOG_PATH"
 fi
 
 # Create directory if needed

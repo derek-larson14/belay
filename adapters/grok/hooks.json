@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|Grep|Glob|run_terminal_command|read_file|search_replace|list_dir|grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "REPLACE_WITH_ROOT/adapters/grok/pretool.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "belay-pi",
+  "version": "2.0.0",
+  "description": "Belay adapter for Pi — hard limits for coding agents",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "keywords": ["pi-package", "pi-extension", "pi", "security", "belay"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/derek-larson14/belay"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

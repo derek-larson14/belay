@@ -23,7 +23,19 @@ case "$TOOL_NAME" in
 esac
 
 HOME_DIR="$HOME"
-ALLOW_PERSISTENCE="${CLAUDE_GUARD_ALLOW_PERSISTENCE:-off}"
+ALLOW_PERSISTENCE="${BELAY_ALLOW_PERSISTENCE:-off}"
+
+# Same home-relative normalization as path-guard: the blocked list is absolute,
+# but `~/.zshrc` and `$HOME/.zshrc` are how agents actually write it.
+for _v in CHECK_PATH CHECK_CMD; do
+  _s="${!_v:-}"
+  [ -z "$_s" ] && continue
+  _s="${_s//\$\{HOME\}/$HOME}"
+  _s="${_s//\$HOME/$HOME}"
+  _s="${_s//\~\//$HOME/}"
+  printf -v "$_v" '%s' "$_s"
+done
+unset _v _s
 
 # === BLOCKED WRITE LOCATIONS ===
 BLOCKED_WRITE_PATHS=(
@@ -55,8 +67,8 @@ BLOCKED_WRITE_PATHS=(
 # --- Persistence mechanisms (toggle with allow_persistence) ---
 # LaunchAgents, LaunchDaemons, systemd, autostart.
 # Power users who manage scheduled tasks through Claude can set
-# allow_persistence = true in claude-guard.toml or
-# CLAUDE_GUARD_ALLOW_PERSISTENCE=on in their environment.
+# allow_persistence = true in belay.toml or
+# BELAY_ALLOW_PERSISTENCE=on in their environment.
 if [ "$ALLOW_PERSISTENCE" != "on" ] && [ "$ALLOW_PERSISTENCE" != "true" ]; then
   BLOCKED_WRITE_PATHS+=(
     # macOS
@@ -106,7 +118,7 @@ if [ -n "$CHECK_CMD" ]; then
     # Catch: echo/cat/tee/cp/mv/install writing to blocked paths
     if echo "$CHECK_CMD" | grep -qF "$pattern"; then
       # Allow read-only commands
-      if echo "$CHECK_CMD" | grep -qE "^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum |readlink )"; then
+      if echo "$CHECK_CMD" | grep -qE "^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum |readlink |grep |egrep |fgrep |rg )"; then
         continue
       fi
       deny "BLOCKED: Bash command references protected path '$pattern'. This location is write-protected to prevent persistence/escalation."

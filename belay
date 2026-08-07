@@ -1,0 +1,297 @@
+#!/bin/bash
+# belay — one management surface for every harness Belay guards.
+#
+# Claude Code has slash commands; Pi and Grok Build have nothing. This is the
+# common denominator: a plain CLI that answers "is it on, what's it enforcing,
+# and where did that setting come from" no matter which agent you run.
+
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+. "$ROOT/core/config.sh"
+
+BOLD=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YEL=$'\033[33m'; OFF=$'\033[0m'
+[ -t 1 ] || { BOLD=""; DIM=""; RED=""; GREEN=""; YEL=""; OFF=""; }
+
+HARNESSES="claude pi grok"
+
+# --- Where each harness keeps its hook wiring ---
+claude_settings() { echo "$HOME/.claude/settings.json"; }
+pi_extension()    { echo "${PI_HOME:-$HOME/.pi}/agent/extensions/belay"; }
+grok_hookfile()   { echo "${GROK_HOME:-$HOME/.grok}/hooks/belay.json"; }
+
+harness_present() {
+  case "$1" in
+    claude) [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1 ;;
+    pi)     [ -d "${PI_HOME:-$HOME/.pi}" ] || command -v pi >/dev/null 2>&1 ;;
+    grok)   [ -d "${GROK_HOME:-$HOME/.grok}" ] || command -v grok >/dev/null 2>&1 ;;
+  esac
+}
+
+harness_wired() {
+  case "$1" in
+    claude) [ -f "$(claude_settings)" ] && grep -q 'belay' "$(claude_settings)" 2>/dev/null ;;
+    pi)     command -v pi >/dev/null 2>&1 && pi list 2>/dev/null | grep -q "belay/adapters/pi" ;;
+    grok)   [ -f "$(grok_hookfile)" ] ;;
+  esac
+}
+
+# --- install ---
+install_claude() { "$ROOT/setup.sh" "$@"; }
+
+install_pi() {
+  chmod +x "$ROOT/adapters/pi/bridge.sh" "$ROOT/core/"*.sh "$ROOT/belay.sh" "$ROOT/guards/"*.sh 2>/dev/null
+
+  # Pi loads extensions from `packages` in its settings.json, NOT from
+  # ~/.pi/agent/extensions/. Symlinking into that directory looks like it
+  # worked and silently never loads.
+  if command -v pi >/dev/null 2>&1; then
+    pi install "$ROOT/adapters/pi"
+    echo "Restart Pi so the extension loads."
+  else
+    echo "${RED}pi not found on PATH.${OFF} Install Pi first, then: pi install $ROOT/adapters/pi"
+    return 1
+  fi
+}
+
+install_grok() { "$ROOT/adapters/grok/install.sh"; }
+
+cmd_install() {
+  local which_h="${1:-auto}"; shift 2>/dev/null || true
+  local targets=""
+
+  if [ "$which_h" = "auto" ] || [ "$which_h" = "all" ]; then
+    for h in $HARNESSES; do
+      if harness_present "$h"; then targets="$targets $h"; fi
+    done
+    if [ -z "$targets" ]; then
+      echo "${RED}No harness detected.${OFF} Looked for ~/.claude, ~/.pi, ~/.grok."
+      echo "Name one explicitly: belay install claude|pi|grok"
+      return 1
+    fi
+    echo "Detected:${targets}"
+  else
+    targets="$which_h"
+  fi
+
+  for h in $targets; do
+    echo ""
+    echo "${BOLD}── $h ──${OFF}"
+    case "$h" in
+      claude) install_claude "$@" ;;
+      pi)     install_pi ;;
+      grok)   install_grok ;;
+      *)      echo "${RED}Unknown harness: $h${OFF}"; return 1 ;;
+    esac
+  done
+}
+
+# --- on / off ---
+cmd_off() {
+  local h="${1:-all}"
+  for t in $( [ "$h" = "all" ] && echo "$HARNESSES" || echo "$h" ); do
+    case "$t" in
+      claude) [ -x "$(belay_home)/guard-toggle.sh" ] && "$(belay_home)/guard-toggle.sh" off || echo "claude: not installed" ;;
+      pi)     command -v pi >/dev/null 2>&1 && pi remove "$ROOT/adapters/pi" 2>/dev/null && echo "pi: removed" || echo "pi: not installed" ;;
+      grok)   if [ -f "$(grok_hookfile)" ]; then
+                rm -f "$(grok_hookfile)"; echo "grok: hook removed"
+              else echo "grok: not installed"; fi ;;
+    esac
+  done
+}
+
+# --- uninstall ---
+# Deny rules shipped by setup.sh before .install-meta.json recorded them.
+# Only used as a fallback for older installs.
+LEGACY_DENY='[
+  "Bash(security dump-keychain*)",
+  "Bash(security find-generic-password*)",
+  "Bash(security find-internet-password*)",
+  "Bash(security export*)",
+  "Bash(pbpaste)",
+  "Bash(pbpaste *)",
+  "Bash(pbcopy)",
+  "Bash(pbcopy *)",
+  "Bash(*remote-debugging-port*)",
+  "Bash(*remote-debugging-pipe*)",
+  "Bash(*remote-debugging-address*)",
+  "Bash(sqlite3 *)"
+]'
+
+remove_deny_rules() {
+  local meta="$(belay_home)/.install-meta.json"
+  local settings deny
+
+  settings="$(jq -r '.settings_file // empty' "$meta" 2>/dev/null)"
+  [ -n "$settings" ] || settings="$HOME/.claude/settings.json"
+  [ -f "$settings" ] || { echo "  no settings file — nothing to clean"; return 0; }
+
+  # Prefer what this install actually wrote; fall back for pre-meta installs.
+  deny="$(jq -c '.deny_rules // empty' "$meta" 2>/dev/null)"
+  [ -n "$deny" ] && [ "$deny" != "null" ] || deny="$LEGACY_DENY"
+
+  local before after out
+  before="$(jq '(.permissions.deny // []) | length' "$settings" 2>/dev/null || echo 0)"
+
+  out="$(jq --argjson ours "$deny" '
+    if (.permissions.deny? | type) == "array" then
+      .permissions.deny = (.permissions.deny - $ours)
+    else . end
+    | if (.permissions.deny? | type) == "array" and (.permissions.deny | length) == 0
+      then del(.permissions.deny) else . end
+    | if (.permissions? | type) == "object" and (.permissions | length) == 0
+      then del(.permissions) else . end
+  ' "$settings" 2>/dev/null)"
+
+  if [ -z "$out" ]; then
+    echo "  ${YEL}could not parse $settings — left untouched${OFF}"
+    return 1
+  fi
+
+  printf '%s' "$out" | jq '.' > "$settings.tmp" && mv "$settings.tmp" "$settings"
+  after="$(jq '(.permissions.deny // []) | length' "$settings" 2>/dev/null || echo 0)"
+  echo "  removed $(( before - after )) deny rule(s) from $settings"
+}
+
+cmd_uninstall() {
+  local purge=false
+  [ "${1:-}" = "--purge" ] && purge=true
+
+  echo "${BOLD}── unwiring harnesses ──${OFF}"
+  cmd_off all
+
+  echo ""
+  echo "${BOLD}── settings.json deny rules ──${OFF}"
+  remove_deny_rules
+
+  echo ""
+  if [ "$purge" = true ]; then
+    echo "${BOLD}── removing $(belay_home) ──${OFF}"
+    rm -rf "$(belay_home)"
+    echo "  gone (config and audit log included)"
+  else
+    echo "${BOLD}── kept ──${OFF}"
+    echo "  $(belay_home)  ${DIM}config, audit log, guard scripts${OFF}"
+    echo "  Delete it too with: belay uninstall --purge"
+  fi
+
+  echo ""
+  echo "Claude Code plugin users: also run ${BOLD}/plugin uninstall belay@belay${OFF}"
+}
+
+cmd_on() {
+  local h="${1:-all}"
+  for t in $( [ "$h" = "all" ] && echo "$HARNESSES" || echo "$h" ); do
+    case "$t" in
+      claude) [ -x "$(belay_home)/guard-toggle.sh" ] && "$(belay_home)/guard-toggle.sh" on || echo "claude: not installed" ;;
+      pi)     install_pi ;;
+      grok)   install_grok ;;
+    esac
+  done
+}
+
+# --- status ---
+# Reports where each value came from, because "why is this blocked" is the
+# question people actually have, and a merged config hides the answer.
+source_of() {
+  local section="$1" key="$2"
+  local proj; proj="$(belay_project_dir)/.belay.toml"
+  local glob; glob="$(belay_home)/config.toml"
+  if [ -n "$(_belay_toml_get "$proj" "$section" "$key")" ]; then echo "project"; return; fi
+  if [ -n "$(_belay_toml_get "$glob" "$section" "$key")" ]; then echo "global"; return; fi
+  echo "default"
+}
+
+guard_row() {
+  local name="$1" default="$2"
+  local env_var="BELAY_$(echo "$name" | tr '[:lower:]-' '[:upper:]_')"
+  local env_val="${!env_var:-}" state src
+
+  if [ "$env_val" = "off" ]; then state="off"; src="env $env_var"
+  elif [ "$env_val" = "on" ]; then state="on"; src="env $env_var"
+  else
+    state="$(belay_config "$name" "enabled" "$default")"
+    [ "$state" = "true" ] && state="on" || state="off"
+    src="$(source_of "$name" "enabled")"
+  fi
+
+  local color; [ "$state" = "on" ] && color="$GREEN" || color="$DIM"
+  printf "  %-17s %s%-4s%s %s(%s)%s\n" "$name" "$color" "$state" "$OFF" "$DIM" "$src" "$OFF"
+}
+
+cmd_status() {
+  echo "${BOLD}Belay${OFF}"
+  echo ""
+  echo "${BOLD}Harnesses${OFF}"
+  for h in $HARNESSES; do
+    local mark detail
+    if ! harness_present "$h"; then
+      printf "  %-8s %snot installed%s\n" "$h" "$DIM" "$OFF"
+    elif harness_wired "$h"; then
+      case "$h" in
+        claude) detail="$(claude_settings)" ;;
+        pi)     detail="registered via pi install" ;;
+        grok)   detail="$(grok_hookfile)" ;;
+      esac
+      printf "  %-8s ${GREEN}guarded${OFF} %s%s%s\n" "$h" "$DIM" "$detail" "$OFF"
+    else
+      printf "  %-8s ${YEL}present, unguarded${OFF} %s(belay install %s)%s\n" "$h" "$DIM" "$h" "$OFF"
+    fi
+  done
+
+  echo ""
+  echo "${BOLD}Guards${OFF}"
+  guard_row "path-guard" true
+  guard_row "write-guard" true
+  guard_row "workspace-guard" false
+  guard_row "network-guard" false
+
+  echo ""
+  echo "${BOLD}Config${OFF}"
+  local proj="$(belay_project_dir)/.belay.toml" glob="$(belay_home)/config.toml"
+  echo "  project root  $(belay_project_dir)"
+  [ -f "$proj" ] && echo "  project       $proj" || echo "  project       ${DIM}none${OFF}"
+  [ -f "$glob" ] && echo "  global        $glob" || echo "  global        ${DIM}none — built-in defaults${OFF}"
+  local audit; audit="$(belay_config "audit-log" "path" "$(belay_home)/audit.jsonl")"
+  echo "  audit log     ${audit/#\~\//$HOME/}"
+}
+
+cmd_log() {
+  local n="${1:-20}"
+  local p; p="$(belay_config "audit-log" "path" "$(belay_home)/audit.jsonl")"
+  p="${p/#\~\//$HOME/}"
+  [ -f "$p" ] || { echo "No audit log at $p"; return 1; }
+  tail -n "$n" "$p"
+}
+
+cmd_test() { "$ROOT/test-guards.sh"; }
+
+usage() {
+  cat <<'USAGE'
+belay — hard limits for coding agents
+
+  belay install [claude|pi|grok|all]   wire Belay into a harness (default: autodetect)
+  belay status                         what's guarded, what's enforced, where it came from
+  belay on   [harness|all]             re-wire
+  belay off  [harness|all]             unwire (scripts and config stay put)
+  belay uninstall [--purge]            unwire everything + drop our deny rules
+  belay log  [N]                       last N audit entries (default 20)
+  belay test                           run the guard suite
+
+belay on/off touch only Belay's own hook entries. Other hooks stay put.
+
+Config: <project>/.belay.toml  >  ~/.belay/config.toml  >  built-in defaults
+USAGE
+}
+
+case "${1:-status}" in
+  install) shift; cmd_install "$@" ;;
+  status)  cmd_status ;;
+  on)      shift; cmd_on "${1:-all}" ;;
+  off)     shift; cmd_off "${1:-all}" ;;
+  uninstall) shift; cmd_uninstall "${1:-}" ;;
+  log)     shift; cmd_log "${1:-20}" ;;
+  test)    cmd_test ;;
+  -h|--help|help) usage ;;
+  *) echo "Unknown command: $1"; echo ""; usage; exit 1 ;;
+esac

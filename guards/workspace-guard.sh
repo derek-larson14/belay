@@ -6,7 +6,7 @@
 # reliably parse all path references in shell commands).
 #
 # Env vars (set by dispatcher):
-#   CLAUDE_GUARD_ALLOWED_ROOTS: colon-separated list of allowed directories
+#   BELAY_ALLOWED_ROOTS: colon-separated list of allowed directories
 #                               empty = $CLAUDE_PROJECT_DIR only
 
 INPUT=$(cat)
@@ -53,7 +53,7 @@ RESOLVED=$(realpath "$CHECK_PATH" 2>/dev/null || echo "$CHECK_PATH")
 
 # Build allowed roots list
 DEFAULT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-ROOTS_STRING="${CLAUDE_GUARD_ALLOWED_ROOTS:-$DEFAULT_ROOT}"
+ROOTS_STRING="${BELAY_ALLOWED_ROOTS:-$DEFAULT_ROOT}"
 
 # If roots string is empty, use default
 [ -z "$ROOTS_STRING" ] && ROOTS_STRING="$DEFAULT_ROOT"

@@ -1,8 +1,16 @@
-# claude-guard.toml — security guard configuration
+# Belay configuration — reference copy.
 #
-# Each guard has an enabled flag + its own settings.
-# Env overrides: CLAUDE_GUARD_<NAME>=off disables a guard for one session.
-# Project override: .claude/claude-guard.toml overrides this file.
+# This file is an example, not a live config. `belay install` copies it to
+# ~/.belay/config.toml on first install and never overwrites it after that.
+#
+# Resolution, highest wins, per key:
+#   BELAY_* env var  >  <project>/.belay.toml  >  ~/.belay/config.toml  >  built-in
+#
+# Per key matters: a .belay.toml setting one value overrides that value only,
+# and leaves the rest of your global config alone.
+#
+# Every setting below is already the built-in default. Delete anything you
+# don't want to pin — an absent file gives you the same posture as this one.
 
 [path-guard]
 enabled = true
@@ -25,7 +33,7 @@ browser-hijacking = true   # --remote-debugging-port, Puppeteer/Playwright conne
 
 [write-guard]
 enabled = true
-allow_persistence = false  # set to true if you manage LaunchAgents/crontab through Claude
+allow_persistence = false  # set true if you manage LaunchAgents/crontab through an agent
 # Blocks writes to shell rc files, SSH authorized_keys, /etc/, and Application Scripts.
 # With allow_persistence = false (default), also blocks LaunchAgents, crontab,
 # launchctl load, and systemd user services.
@@ -41,8 +49,8 @@ mode = "pattern"  # "sandbox" (kernel-level, macOS only) | "pattern" (regex bloc
 
 [workspace-guard]
 enabled = false  # opt-in — breaks cross-repo work
-allowed_roots = ""  # colon-separated paths; empty = $CLAUDE_PROJECT_DIR only
+allowed_roots = ""  # colon-separated paths; empty = detected project root only
 
 [audit-log]
 enabled = true
-path = "~/.claude/logs/claude-audit.jsonl"
+path = "~/.belay/audit.jsonl"

@@ -1,9 +1,9 @@
 ---
-description: Turn Claude Guard on or off
+description: Turn Belay on or off
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write
 ---
 
-# Claude Guard Toggle
+# Belay Toggle
 
 **Claude Code only.** macOS and Linux.
 
@@ -20,18 +20,18 @@ Quick on/off for all guards at once by editing hooks in settings.json.
 ## Turn off
 
 1. Read `~/.claude/settings.json`
-2. Find and remove hook entries that reference `claude-guard` from `hooks.PreToolUse` and `hooks.PostToolUse`
-3. Save the removed entries to `~/.config/claude-guard/.hooks-backup.json` (create directory if needed)
+2. Find and remove hook entries that reference `belay` from `hooks.PreToolUse` and `hooks.PostToolUse`
+3. Save the removed entries to `~/.belay/.hooks-backup.json` (create directory if needed)
 4. Write the updated settings file
-5. Report: "Guards off. Hooks removed from settings.json. Run `/claude-guard:toggle on` to re-enable."
+5. Report: "Guards off. Hooks removed from settings.json. Run `/belay:toggle on` to re-enable."
 
 ## Turn on
 
 1. Check if hooks are already registered. If yes, report "Guards are already on" and show status.
-2. Look for backup at `~/.config/claude-guard/.hooks-backup.json`
+2. Look for backup at `~/.belay/.hooks-backup.json`
 3. If backup exists, merge those hooks back into settings.json
 4. If no backup, find the guard scripts (plugin cache first) and register fresh hooks:
-   - PreToolUse: `Bash|Read|Edit|Write|Grep|Glob` -> claude-guard.sh
+   - PreToolUse: `Bash|Read|Edit|Write|Grep|Glob` -> belay.sh
    - PostToolUse: `*` -> audit-log.sh
 5. Write the updated settings file
 6. Report: "Guards on." and show one-liner status of each guard.

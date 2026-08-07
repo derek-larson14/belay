@@ -4,7 +4,7 @@
 # Claude Code calls this before Read, Grep, Glob, Edit, and Bash tools.
 # It receives JSON on stdin with tool_name and tool_input.
 #
-# Categories can be toggled in claude-guard.toml under [path-guard.categories].
+# Categories can be toggled in belay.toml under [path-guard.categories].
 # Missing categories default to ON — you must explicitly disable them.
 #
 # Philosophy: these are paths no AI agent should ever need to access.
@@ -39,6 +39,65 @@ esac
 # If nothing to check, allow
 [ -z "$CHECK_STRING" ] && exit 0
 
+# Normalize home-relative spellings before matching. The blocklist is written
+# in absolute form ($HOME/.ssh), but agents write `~/.ssh/id_rsa` or
+# `$HOME/.ssh/id_rsa`, and a literal substring match never sees those as the
+# same path — so the most obvious way to ask for a secret sailed straight
+# through. Expand them to the real path first.
+CHECK_STRING="${CHECK_STRING//\$\{HOME\}/$HOME}"
+CHECK_STRING="${CHECK_STRING//\$HOME/$HOME}"
+CHECK_STRING="${CHECK_STRING//\~\//$HOME/}"
+
+# Resolve relative paths against the session's working directory — the approach
+# pi-guardrails uses. Without it, an agent already sitting inside a sensitive
+# directory just reads `id_rsa` and there is no absolute path to match on.
+SESSION_CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+[ -z "$SESSION_CWD" ] && SESSION_CWD="$PWD"
+
+case "$TOOL_NAME" in
+  Read|Edit|Write|Grep|Glob)
+    if [ "${CHECK_STRING#/}" = "$CHECK_STRING" ]; then
+      CHECK_STRING="$SESSION_CWD/${CHECK_STRING#./}"
+    fi
+    ;;
+  Bash)
+    # A shell command issued from inside a sensitive directory is itself
+    # suspect, so the working directory is part of what gets checked.
+    CHECK_STRING="$CHECK_STRING
+$SESSION_CWD"
+
+    # Substring matching cannot see `cat canary.txt` for what it is. Pull out
+    # path-like arguments, expand ~ and globs, resolve each against cwd, and
+    # append the absolute forms so the normal pattern check catches them.
+    # This is a best-effort tokenizer, not a shell parser — see README.
+    _bash_targets() {
+      local cmd="$1" cwd="$2" tok expanded
+      cmd="${cmd//|/ }"; cmd="${cmd//;/ }"; cmd="${cmd//&/ }"
+      cmd="${cmd//\`/ }"; cmd="${cmd//$'\n'/ }"
+      cmd="${cmd//>/ }"; cmd="${cmd//</ }"
+      for tok in $cmd; do
+        tok="${tok%\"}"; tok="${tok#\"}"
+        tok="${tok%\'}"; tok="${tok#\'}"
+        [ -z "$tok" ] && continue
+        case "$tok" in -*) continue ;; esac
+        # Only things that look like paths
+        case "$tok" in */*|.*|*.*) ;; *) continue ;; esac
+        tok="${tok/#\~\//$HOME/}"
+        case "$tok" in /*) ;; *) tok="$cwd/${tok#./}" ;; esac
+        # Expand globs when they resolve; otherwise keep the literal token
+        if case "$tok" in *[\*\?\[]*) true ;; *) false ;; esac; then
+          expanded=$(compgen -G "$tok" 2>/dev/null)
+          [ -n "$expanded" ] && printf '%s\n' "$expanded" && continue
+        fi
+        printf '%s\n' "$tok"
+      done
+    }
+    BASH_TARGETS=$(_bash_targets "$CHECK_STRING" "$SESSION_CWD")
+    [ -n "$BASH_TARGETS" ] && CHECK_STRING="$CHECK_STRING
+$BASH_TARGETS"
+    ;;
+esac
+
 # For Bash: git commands don't access file contents — commit messages, tag messages,
 # and log output can mention sensitive paths without it being a real file access.
 # Skip all path checks for git operations to avoid false positives.
@@ -49,45 +108,19 @@ fi
 HOME_DIR="$HOME"
 
 # === CONFIG HELPERS ===
-# Find config file (same resolution as claude-guard.sh dispatcher)
-find_config() {
-  local project="${CLAUDE_PROJECT_DIR:-.}/.claude/claude-guard.toml"
-  local global="$HOME/.config/claude-guard/config.toml"
-  local bundled="$(cd "$(dirname "$0")/.." && pwd)/claude-guard.toml"
-
-  for f in "$project" "$global" "$bundled"; do
-    [ -f "$f" ] && echo "$f" && return
-  done
-}
-
-CONFIG_FILE=$(find_config)
+. "$(cd "$(dirname "$0")/.." && pwd)/core/config.sh"
 
 # Check if a category is enabled. Defaults to ON if not specified.
-# Env override: CLAUDE_GUARD_PATH_CAT_<CATEGORY>=off
+# Env override: BELAY_PATH_CAT_<CATEGORY>=off
 category_enabled() {
   local cat_name="$1"
-  # Env override (e.g. CLAUDE_GUARD_PATH_CAT_CREDENTIALS=off)
-  local env_var="CLAUDE_GUARD_PATH_CAT_$(echo "$cat_name" | tr '[:lower:]-' '[:upper:]_')"
+  # Env override (e.g. BELAY_PATH_CAT_CREDENTIALS=off)
+  local env_var="BELAY_PATH_CAT_$(echo "$cat_name" | tr '[:lower:]-' '[:upper:]_')"
   local env_val="${!env_var:-}"
   [ "$env_val" = "off" ] && return 1
   [ "$env_val" = "on" ] && return 0
 
-  # Check toml
-  [ -z "$CONFIG_FILE" ] && return 0  # no config = all on
-  local val
-  val=$(awk -v sect="[path-guard.categories]" -v k="$cat_name" '
-    $0 == sect { in_s=1; next }
-    /^\[/ { in_s=0 }
-    in_s && $1 == k {
-      sub(/^[^=]*=[ \t]*/, "")
-      gsub(/"/, "")
-      print
-      found=1
-      exit
-    }
-    END { if (!found) print "true" }
-  ' "$CONFIG_FILE")
-  [ "$val" = "true" ]
+  [ "$(belay_config "path-guard.categories" "$cat_name" "true")" = "true" ]
 }
 
 # === DENY HELPER ===
@@ -105,16 +138,31 @@ deny() {
 check_patterns() {
   local category="$1"
   shift
+  local pattern rel rel_re
   for pattern in "$@"; do
     if echo "$CHECK_STRING" | grep -qF "$pattern"; then
       deny "BLOCKED: access to sensitive path matching '$pattern'. This contains credentials, messages, browser sessions, or system secrets. Ask the user to provide this data manually if needed."
     fi
+
+    # A home-rooted pattern can also show up as a bare relative path once the
+    # command has cd'd somewhere: `cd ~ && cat .ssh/id_rsa`. Match the part
+    # below $HOME as a whole path component so `.ssh` hits but `core.sshCommand`
+    # does not.
+    case "$pattern" in
+      "$HOME_DIR"/*)
+        rel="${pattern#"$HOME_DIR"/}"
+        rel_re=$(printf '%s' "$rel" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')
+        if echo "$CHECK_STRING" | grep -qE "(^|[[:space:]'\"=/])${rel_re}(/|[[:space:]'\"]|$)"; then
+          deny "BLOCKED: access to sensitive path matching '$pattern'. This contains credentials, messages, browser sessions, or system secrets. Ask the user to provide this data manually if needed."
+        fi
+        ;;
+    esac
   done
 }
 
 # === CATEGORIES ===
 # Each category is a named group of patterns. Categories default to ON.
-# Disable in claude-guard.toml under [path-guard.categories] or via env var.
+# Disable in belay.toml under [path-guard.categories] or via env var.
 
 if category_enabled "credentials"; then
   check_patterns "credentials" \
@@ -248,36 +296,81 @@ fi
 #
 # Turn this on if you want to prevent Claude from editing settings across
 # sessions (e.g. agent removes hooks in session 1, session 2 starts unprotected).
-# To enable: set CLAUDE_GUARD_SELF_PROTECT=on or uncomment below.
-SELF_PROTECT="${CLAUDE_GUARD_SELF_PROTECT:-off}"
+# To enable: set BELAY_SELF_PROTECT=on or uncomment below.
+SELF_PROTECT="${BELAY_SELF_PROTECT:-off}"
 
 if [ "$SELF_PROTECT" = "on" ]; then
+
+# Protected locations are resolved at runtime from where this guard actually
+# lives. Matching a hardcoded name like "belay" meant renaming the install
+# directory silently turned self-protection off, and any unrelated path
+# containing that word got blocked. Neither is acceptable for a security check.
+GUARD_SRC="$(cd "$(dirname "$0")/.." && pwd)"
+
 SELF_PROTECT_PATHS=(
-  "claude-guard"
-  ".claude/settings.json"
+  "$GUARD_SRC"
+  "$(belay_home)"
+  "$HOME/.claude/settings.json"
+  "${PI_HOME:-$HOME/.pi}/agent/extensions/belay"
+  "${GROK_HOME:-$HOME/.grok}/hooks/belay.json"
+)
+[ -n "${BELAY_ROOT:-}" ] && SELF_PROTECT_PATHS+=("$BELAY_ROOT")
+
+# Absolute-path matching misses `cd ~/.belay && rm belay.sh`, so the guard
+# filenames themselves are protected too. Only distinctive names — nothing
+# generic enough to collide with an unrelated file.
+SELF_PROTECT_NAMES=(
+  "belay.sh" "guard-toggle.sh" "audit-log.sh"
+  "path-guard.sh" "write-guard.sh" "network-guard.sh" "workspace-guard.sh"
 )
 
 if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Bash" ]; then
-  for sp in "${SELF_PROTECT_PATHS[@]}"; do
-    if echo "$CHECK_STRING" | grep -qF "$sp"; then
-      if [ "$TOOL_NAME" = "Bash" ]; then
-        # Allow read-only Bash commands that reference the path
-        if echo "$CHECK_STRING" | grep -qE "^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum )"; then
-          continue
+  # Resolve relative file paths so `Edit belay.sh` from inside the install
+  # directory is checked against the same absolute paths as everything else.
+  SELF_CHECK="$CHECK_STRING"
+  if [ "$TOOL_NAME" != "Bash" ] && [ "${SELF_CHECK#/}" = "$SELF_CHECK" ]; then
+    SELF_CHECK="$PWD/$SELF_CHECK"
+  fi
+
+  # Read-only Bash commands may reference these paths freely
+  SELF_READONLY=false
+  if [ "$TOOL_NAME" = "Bash" ] && echo "$CHECK_STRING" | grep -qE "^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum |grep |egrep |fgrep |rg )"; then
+    SELF_READONLY=true
+  fi
+
+  if [ "$SELF_READONLY" = false ]; then
+    for sp in "${SELF_PROTECT_PATHS[@]}"; do
+      [ -n "$sp" ] || continue
+      if [ "$TOOL_NAME" != "Bash" ]; then
+        # Exact path or a child of it. Substring matching would treat
+        # ~/Github/belay-experiments as part of ~/Github/belay.
+        case "$SELF_CHECK" in
+          "$sp"|"$sp"/*) deny "BLOCKED: cannot modify Belay's own scripts, config, or harness hook wiring. To turn guards off, run this yourself in a terminal: $(belay_home)/guard-toggle.sh off" ;;
+        esac
+      else
+        # Same boundary rule inside a command line: the path must end or be
+        # followed by a separator, never by more path characters.
+        sp_re=$(printf '%s' "$sp" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')
+        if echo "$SELF_CHECK" | grep -qE "(^|[[:space:]'\"=])${sp_re}(/|[[:space:]'\";|&]|$)"; then
+          deny "BLOCKED: cannot modify Belay's own scripts, config, or harness hook wiring. To turn guards off, run this yourself in a terminal: $(belay_home)/guard-toggle.sh off"
         fi
       fi
-      deny "BLOCKED: cannot modify security hooks or Claude settings. Run this from your terminal to disable guards: ~/.config/claude-guard/guard-toggle.sh off"
-    fi
-  done
+    done
+    for sn in "${SELF_PROTECT_NAMES[@]}"; do
+      if echo "$SELF_CHECK" | grep -qE "(^|[/[:space:]'\"])$(echo "$sn" | sed 's/\./\\./g')([[:space:]]|$|['\"])"; then
+        deny "BLOCKED: cannot modify Belay's own scripts, config, or harness hook wiring. To turn guards off, run this yourself in a terminal: $(belay_home)/guard-toggle.sh off"
+      fi
+    done
+  fi
 fi
 fi  # end self-protect check
 
 # === CUSTOM BLOCKLIST ===
 # Load additional patterns from a user-local file.
-# Default: ~/.config/claude-guard/custom-patterns.txt
-# Override: CLAUDE_GUARD_CUSTOM_BLOCKLIST=/path/to/file
+# Default: ~/.belay/custom-patterns.txt
+# Override: BELAY_CUSTOM_BLOCKLIST=/path/to/file
 # Format: one pattern per line, # comments, $HOME expanded automatically.
-CUSTOM_LIST="${CLAUDE_GUARD_CUSTOM_BLOCKLIST:-$HOME/.config/claude-guard/custom-patterns.txt}"
+CUSTOM_LIST="${BELAY_CUSTOM_BLOCKLIST:-$(belay_home)/custom-patterns.txt}"
 if [ -f "$CUSTOM_LIST" ]; then
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
@@ -292,7 +385,7 @@ fi
 # If .env-project-allowed marker exists (user said yes to project .env access during setup),
 # only block home directory .env files. Otherwise block all .env files.
 if category_enabled "credentials"; then
-  GUARD_DIR="${CLAUDE_GUARD_INSTALL_DIR:-$HOME/.config/claude-guard}"
+  GUARD_DIR="${BELAY_INSTALL_DIR:-$(belay_home)}"
   if echo "$CHECK_STRING" | grep -qE '\.env($|[^a-zA-Z])'; then
     if ! echo "$CHECK_STRING" | grep -qF '.venv'; then
       if [ -f "$GUARD_DIR/.env-project-allowed" ]; then

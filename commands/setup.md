@@ -1,9 +1,9 @@
 ---
-description: Set up Claude Guard — interactive first-time configuration
+description: Set up Belay — interactive first-time configuration
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Edit, Write
 ---
 
-# Claude Guard Setup
+# Belay Setup
 
 **Claude Code only.** macOS and Linux.
 
@@ -11,34 +11,34 @@ Interactive setup. All questions go through AskUserQuestion. The actual installa
 
 ## Finding Guard Scripts
 
-Look for claude-guard.sh in this order:
-1. Plugin cache: `find ~/.claude/plugins/cache -path "*/claude-guard/*/claude-guard.sh" | head -1`
-2. Local repo: search `~/Github/claude-guard/`, `~/Projects/claude-guard/`, `~/code/claude-guard/`
+Look for belay.sh in this order:
+1. Plugin cache: `find ~/.claude/plugins/cache -path "*/belay/*/belay.sh" | head -1`
+2. Local repo: search `~/Github/belay/`, `~/Projects/belay/`, `~/code/belay/`
 
 Set `GUARD_DIR` to the directory containing the found script.
 
 If not found anywhere, tell the user to install the plugin:
 ```
-/plugin marketplace add derek-larson14/claude-guard
-/plugin install claude-guard@claude-guard
+/plugin marketplace add derek-larson14/belay
+/plugin install belay@belay
 ```
-Then try `/claude-guard:setup` again.
+Then try `/belay:setup` again.
 
 ## Step 1: Check existing hooks
 
-Read `~/.claude/settings.json`. Check if `hooks.PreToolUse` contains an entry matching `claude-guard`.
+Read `~/.claude/settings.json`. Check if `hooks.PreToolUse` contains an entry matching `belay`.
 
 If hooks are already registered, tell the user and skip to the questions.
 
 If not registered, use AskUserQuestion:
-"Where should Claude Guard hooks be registered?"
+"Where should Belay hooks be registered?"
 - Global (~/.claude/settings.json) — applies to all projects
 - Project (.claude/settings.json) — only this project
 
 Remember the answer as `--scope global` or `--scope project`.
 
 If hooks already exist in the file, use AskUserQuestion:
-"Your settings file already has hooks. How should we add Claude Guard?"
+"Your settings file already has hooks. How should we add Belay?"
 - Merge (append alongside existing hooks)
 - Replace (overwrite existing hooks)
 - Skip (don't touch hooks)
@@ -79,4 +79,4 @@ $GUARD_DIR/setup.sh --deny-list --sqlite-deny --env-project-allowed --block-osas
 
 ## Step 4: Summary
 
-Report what setup.sh output. Mention `/claude-guard:configure` to change settings later.
+Report what setup.sh output. Mention `/belay:configure` to change settings later.

@@ -14,9 +14,11 @@
 #   sandbox-exec is used even when network mode is "off" or "pattern".
 #
 # Env vars (set by dispatcher):
-#   CLAUDE_GUARD_NETWORK_MODE: "sandbox" | "pattern" | "off"
-#   CLAUDE_GUARD_SANDBOX_DENY_WRITE: colon-separated paths to block writes to
-#   CLAUDE_GUARD_SANDBOX_ALLOW_WRITE: colon-separated exceptions within denied paths
+#   BELAY_NETWORK_MODE: "sandbox" | "pattern" | "off"
+#   BELAY_SANDBOX_DENY_WRITE: colon-separated paths to block writes to
+#   BELAY_SANDBOX_ALLOW_WRITE: colon-separated exceptions within denied paths
+
+. "$(cd "$(dirname "$0")/.." && pwd)/core/config.sh"
 
 INPUT=$(cat)
 
@@ -28,7 +30,7 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -z "$COMMAND" ] && exit 0
 
-MODE="${CLAUDE_GUARD_NETWORK_MODE:-sandbox}"
+MODE="${BELAY_NETWORK_MODE:-sandbox}"
 
 deny() {
   jq -n \
@@ -70,10 +72,10 @@ fi
 # osascript — only blocked if user opted out during setup
 # (The .block-osascript marker is created by setup.sh when user says no to AppleScript)
 # When network sandbox is on, any network calls osascript spawns are already blocked at kernel level.
-GUARD_DIR="${CLAUDE_GUARD_INSTALL_DIR:-$HOME/.config/claude-guard}"
+GUARD_DIR="${BELAY_INSTALL_DIR:-$(belay_home)}"
 if [ -f "$GUARD_DIR/.block-osascript" ]; then
   if echo "$COMMAND" | grep -qE '\bosascript\b'; then
-    deny "BLOCKED by network-guard: osascript blocked per setup preferences. Remove ~/.config/claude-guard/.block-osascript to allow."
+    deny "BLOCKED by network-guard: osascript blocked per setup preferences. Remove ~/.belay/.block-osascript to allow."
   fi
 fi
 
@@ -84,8 +86,8 @@ fi
 
 # === SANDBOX (macOS only) ===
 # Activated when network mode is "sandbox" OR file write restrictions are set.
-DENY_WRITE="${CLAUDE_GUARD_SANDBOX_DENY_WRITE:-}"
-ALLOW_WRITE="${CLAUDE_GUARD_SANDBOX_ALLOW_WRITE:-}"
+DENY_WRITE="${BELAY_SANDBOX_DENY_WRITE:-}"
+ALLOW_WRITE="${BELAY_SANDBOX_ALLOW_WRITE:-}"
 
 USE_SANDBOX=false
 [ "$MODE" = "sandbox" ] && USE_SANDBOX=true

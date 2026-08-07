@@ -3,7 +3,7 @@ description: View guard status and change settings
 allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Edit, Write
 ---
 
-# Claude Guard Configure
+# Belay Configure
 
 **Claude Code only.** macOS and Linux.
 
@@ -11,7 +11,7 @@ View current guard status and change settings interactively.
 
 ## Step 1: Find config and show current state
 
-Find the guard scripts and active claude-guard.toml. Display current status:
+Run `belay status` for current state, then locate the config layer to edit. Display:
 
 ```
 path-guard:      ON | write-guard: ON | network-guard: OFF (pattern) | workspace-guard: OFF | audit: ON
@@ -39,7 +39,7 @@ For each option, explain what it does before applying:
 
 ## Step 3: Apply changes
 
-Edit the claude-guard.toml file. If modifying the plugin cache copy, note: "This config may reset on plugin update. For a persistent override, I can create `.claude/claude-guard.toml` in your project directory instead." Use AskUserQuestion to let the user choose.
+Edit `~/.belay/config.toml` for a global change, or `.belay.toml` at the project root for a project-scoped one. Use AskUserQuestion to let the user choose which scope they want. Never edit files under the plugin cache — those are replaced on update.
 
 ## Step 4: Loop or exit
 

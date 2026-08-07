@@ -3,7 +3,7 @@ description: Full security audit — hooks, guards, permissions, audit log
 allowed-tools: Read, Glob, Grep, Bash
 ---
 
-# Claude Guard Scan
+# Belay Scan
 
 **Claude Code only.** macOS and Linux.
 
@@ -12,13 +12,13 @@ Perform a full security audit. Find the guard scripts (plugin cache first, then 
 ## 1. Hook registration
 
 Read `~/.claude/settings.json`. Check `hooks.PreToolUse` and `hooks.PostToolUse`:
-- Is claude-guard.sh registered? On which tools?
+- Is belay.sh registered? On which tools?
 - Is audit-log.sh registered as PostToolUse?
 - Any legacy individual hooks (path-guard.sh registered directly)?
 
 ## 2. Guard configuration
 
-Find and read the active `claude-guard.toml` (project override first, then bundled). For each guard, report enabled/disabled and key settings.
+Run `belay status` — it reports every guard, its value, and which config layer set it. For each guard, report enabled/disabled and key settings.
 
 ## 3. Gap analysis
 
@@ -41,10 +41,22 @@ If audit-log is enabled, find the log file and summarize the last 24 hours:
 - Tool usage breakdown (top 5)
 - Any blocks or interesting patterns
 
-## 6. Report
+## 6. Credential exposure checks
+
+Scan for common misconfigurations that path-guard doesn't catch at runtime:
+
+**LaunchAgent plist scan** — read all `~/Library/LaunchAgents/*.plist` files and check EnvironmentVariables blocks for token-like patterns: `sk-ant-`, `_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`. Flag any matches with the plist name and key name.
+
+**World-readable log paths** — check StandardOutPath and StandardErrorPath in all plists. Flag any that write to `/tmp/` (world-readable by default).
+
+**Script permissions** — find any `.sh` files executed by LaunchAgents (check ProgramArguments in each plist). Check their permissions. Flag any that are world-readable (644 or 755 — should be 700).
+
+**Stale credential files** — check if these files exist: `~/.anthropic_secrets`, `~/.anthropic_api_key`, `~/.openai_key`. Flag any that are present.
+
+## 7. Report
 
 ```
-## Claude Guard Security Report
+## Belay Security Report
 
 ### Guard Status
   path-guard:      [ON/OFF] -- blocks reads to credentials, messages, browser sessions
@@ -59,6 +71,12 @@ If audit-log is enabled, find the log file and summarize the last 24 hours:
 
 ### Issues Found
   [list any gaps, misconfigurations, or recommendations]
+
+### Credential Exposure
+  LaunchAgent plists: [X checked, Y flagged]
+  World-readable log paths: [list any /tmp/ paths found]
+  Script permissions: [OK or list of world-readable scripts]
+  Stale credential files: [list any found]
 
 ### Permission Stats
   [X] Bash allow rules | [Y] deny rules

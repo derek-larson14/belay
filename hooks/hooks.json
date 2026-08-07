@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'GUARD=$(find ~/.claude/plugins/cache -path \"*/claude-guard/*/claude-guard.sh\" 2>/dev/null | head -1); [ -x \"$GUARD\" ] && exec \"$GUARD\" || cat >/dev/null'"
+            "command": "bash -c 'GUARD=$(find ~/.claude/plugins/cache -path \"*/belay/*/belay.sh\" 2>/dev/null | head -1); [ -x \"$GUARD\" ] && exec \"$GUARD\" || cat >/dev/null'"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'AUDIT=$(find ~/.claude/plugins/cache -path \"*/claude-guard/*/audit-log.sh\" 2>/dev/null | head -1); [ -x \"$AUDIT\" ] && exec \"$AUDIT\" || cat >/dev/null'"
+            "command": "bash -c 'AUDIT=$(find ~/.claude/plugins/cache -path \"*/belay/*/audit-log.sh\" 2>/dev/null | head -1); [ -x \"$AUDIT\" ] && exec \"$AUDIT\" || cat >/dev/null'"
           }
         ]
       }
