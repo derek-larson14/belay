@@ -20,14 +20,21 @@ get_config() { belay_config "$@"; }
 # config at all still gets the intended posture: protective guards on,
 # disruptive guards (network sandbox, workspace jail) opt-in.
 is_enabled() {
-  local name="$1" default="${2:-true}"
+  local name="$1" default="${2:-true}" env_var
   # Env override: BELAY_PATH_GUARD=off (or =on to force-enable)
-  local env_var="BELAY_$(echo "$name" | tr '[:lower:]-' '[:upper:]_')"
+  case "$name" in
+    path-guard)      env_var=BELAY_PATH_GUARD ;;
+    write-guard)     env_var=BELAY_WRITE_GUARD ;;
+    workspace-guard) env_var=BELAY_WORKSPACE_GUARD ;;
+    network-guard)   env_var=BELAY_NETWORK_GUARD ;;
+    *) env_var="BELAY_$(echo "$name" | tr '[:lower:]-' '[:upper:]_')" ;;
+  esac
   local env_val="${!env_var:-}"
   [ "$env_val" = "off" ] && return 1
   [ "$env_val" = "on" ] && return 0
 
-  [ "$(get_config "$name" "enabled" "$default")" = "true" ]
+  get_config "$name" "enabled" "$default" >/dev/null
+  [ "$BELAY_CONFIG_VAL" = "true" ]
 }
 
 # --- Read stdin once ---
@@ -59,9 +66,18 @@ run_guard() {
 # --- Pass config to guards via env vars ---
 # "pattern" over "sandbox" as the fallback mode: sandbox-exec wraps every Bash
 # call and kills all network, which is not something to inherit by accident.
-export BELAY_NETWORK_MODE="${BELAY_NETWORK_MODE:-$(get_config "network-guard" "mode" "pattern")}"
-export BELAY_ALLOW_PERSISTENCE="${BELAY_ALLOW_PERSISTENCE:-$(get_config "write-guard" "allow_persistence" "false")}"
-export BELAY_ALLOWED_ROOTS="${BELAY_ALLOWED_ROOTS:-$(get_config "workspace-guard" "allowed_roots" "$(belay_project_dir)")}"
+if [ -z "${BELAY_NETWORK_MODE:-}" ]; then
+  get_config "network-guard" "mode" "pattern" >/dev/null
+  export BELAY_NETWORK_MODE="$BELAY_CONFIG_VAL"
+fi
+if [ -z "${BELAY_ALLOW_PERSISTENCE:-}" ]; then
+  get_config "write-guard" "allow_persistence" "false" >/dev/null
+  export BELAY_ALLOW_PERSISTENCE="$BELAY_CONFIG_VAL"
+fi
+if [ -z "${BELAY_ALLOWED_ROOTS:-}" ]; then
+  get_config "workspace-guard" "allowed_roots" "$(belay_project_dir)" >/dev/null
+  export BELAY_ALLOWED_ROOTS="$BELAY_CONFIG_VAL"
+fi
 
 # --- Run guards sequentially ---
 is_enabled "path-guard"      true  && run_guard "$GUARD_DIR/path-guard.sh"

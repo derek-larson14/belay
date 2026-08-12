@@ -101,8 +101,12 @@ esac
 # For Bash: git commands don't access file contents — commit messages, tag messages,
 # and log output can mention sensitive paths without it being a real file access.
 # Skip all path checks for git operations to avoid false positives.
-if [ "$TOOL_NAME" = "Bash" ] && echo "$CHECK_STRING" | grep -qE '^\s*git\b'; then
-  exit 0
+# In-process regex: grep-per-check was the bulk of PreToolUse latency.
+if [ "$TOOL_NAME" = "Bash" ]; then
+  _git_re='^[[:space:]]*git([^[:alnum:]_]|$)'
+  if [[ "$CHECK_STRING" =~ $_git_re ]]; then
+    exit 0
+  fi
 fi
 
 HOME_DIR="$HOME"
@@ -112,15 +116,29 @@ HOME_DIR="$HOME"
 
 # Check if a category is enabled. Defaults to ON if not specified.
 # Env override: BELAY_PATH_CAT_<CATEGORY>=off
+# Known categories are mapped without `tr` — 11 tr processes were ~80ms
+# on the PreToolUse hot path.
 category_enabled() {
-  local cat_name="$1"
-  # Env override (e.g. BELAY_PATH_CAT_CREDENTIALS=off)
-  local env_var="BELAY_PATH_CAT_$(echo "$cat_name" | tr '[:lower:]-' '[:upper:]_')"
+  local cat_name="$1" env_var
+  case "$cat_name" in
+    credentials)        env_var=BELAY_PATH_CAT_CREDENTIALS ;;
+    browser-sessions)   env_var=BELAY_PATH_CAT_BROWSER_SESSIONS ;;
+    messages)           env_var=BELAY_PATH_CAT_MESSAGES ;;
+    keychains)          env_var=BELAY_PATH_CAT_KEYCHAINS ;;
+    password-managers)  env_var=BELAY_PATH_CAT_PASSWORD_MANAGERS ;;
+    system-data)        env_var=BELAY_PATH_CAT_SYSTEM_DATA ;;
+    shell-history)      env_var=BELAY_PATH_CAT_SHELL_HISTORY ;;
+    claude-internals)   env_var=BELAY_PATH_CAT_CLAUDE_INTERNALS ;;
+    clipboard)          env_var=BELAY_PATH_CAT_CLIPBOARD ;;
+    browser-hijacking)  env_var=BELAY_PATH_CAT_BROWSER_HIJACKING ;;
+    *) env_var="BELAY_PATH_CAT_$(echo "$cat_name" | tr '[:lower:]-' '[:upper:]_')" ;;
+  esac
   local env_val="${!env_var:-}"
   [ "$env_val" = "off" ] && return 1
   [ "$env_val" = "on" ] && return 0
 
-  [ "$(belay_config "path-guard.categories" "$cat_name" "true")" = "true" ]
+  belay_config "path-guard.categories" "$cat_name" "true" >/dev/null
+  [ "$BELAY_CONFIG_VAL" = "true" ]
 }
 
 # === DENY HELPER ===
@@ -135,12 +153,57 @@ deny() {
   exit 0
 }
 
+# True if $2 appears in $1 as a whole path component.
+# Same boundary rule as the old grep -E:
+#   preceded by start / whitespace / ' / " / = / /
+#   followed by end / / / whitespace / ' / "
+# In-process so `cd ~ && cat .ssh/id_rsa` still hits, `core.sshCommand` does not.
+_has_path_component() {
+  local s="$1" rel="$2" prefix rest prev next
+  case "$s" in
+    *"$rel"*) ;;
+    *) return 1 ;;
+  esac
+  prefix="${s%%"$rel"*}"
+  rest="${s#*"$rel"}"
+  if [ -n "$prefix" ]; then
+    prev="${prefix#"${prefix%?}"}"
+    case "$prev" in
+      [[:space:]]|"'"|'"'|'='|'/') ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [ -n "$rest" ]; then
+    next="${rest%"${rest#?}"}"
+    case "$next" in
+      '/'|[[:space:]]|"'"|'"') ;;
+      *) return 1 ;;
+    esac
+  fi
+  return 0
+}
+
+# Escape an ERE so it can be interpolated into [[ =~ ]] without a sed process.
+# Only used off the allow-path hot path (self-protect / scoped .env).
+_ere_escape() {
+  local s="$1" i c out=""
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      '\'|'.'|'['|']'|'^'|'$'|'*'|'+'|'?'|'('|')'|'{'|'}'|'|') out+="\\$c" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 check_patterns() {
   local category="$1"
   shift
-  local pattern rel rel_re
+  local pattern rel
   for pattern in "$@"; do
-    if echo "$CHECK_STRING" | grep -qF "$pattern"; then
+    # bash substring match — same as grep -F, no process
+    if [[ "$CHECK_STRING" == *"$pattern"* ]]; then
       deny "BLOCKED: access to sensitive path matching '$pattern'. This contains credentials, messages, browser sessions, or system secrets. Ask the user to provide this data manually if needed."
     fi
 
@@ -151,8 +214,7 @@ check_patterns() {
     case "$pattern" in
       "$HOME_DIR"/*)
         rel="${pattern#"$HOME_DIR"/}"
-        rel_re=$(printf '%s' "$rel" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')
-        if echo "$CHECK_STRING" | grep -qE "(^|[[:space:]'\"=/])${rel_re}(/|[[:space:]'\"]|$)"; then
+        if _has_path_component "$CHECK_STRING" "$rel"; then
           deny "BLOCKED: access to sensitive path matching '$pattern'. This contains credentials, messages, browser sessions, or system secrets. Ask the user to provide this data manually if needed."
         fi
         ;;
@@ -334,7 +396,8 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
 
   # Read-only Bash commands may reference these paths freely
   SELF_READONLY=false
-  if [ "$TOOL_NAME" = "Bash" ] && echo "$CHECK_STRING" | grep -qE "^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum |grep |egrep |fgrep |rg )"; then
+  _ro_re='^(cat |head |tail |less |more |wc |file |stat |ls |diff |md5 |shasum |grep |egrep |fgrep |rg )'
+  if [ "$TOOL_NAME" = "Bash" ] && [[ "$CHECK_STRING" =~ $_ro_re ]]; then
     SELF_READONLY=true
   fi
 
@@ -350,14 +413,16 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
       else
         # Same boundary rule inside a command line: the path must end or be
         # followed by a separator, never by more path characters.
-        sp_re=$(printf '%s' "$sp" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')
-        if echo "$SELF_CHECK" | grep -qE "(^|[[:space:]'\"=])${sp_re}(/|[[:space:]'\";|&]|$)"; then
+        sp_re=$(_ere_escape "$sp")
+        sp_re="(^|[[:space:]'\"=])${sp_re}(/|[[:space:]'\";|&]|$)"
+        if [[ "$SELF_CHECK" =~ $sp_re ]]; then
           deny "BLOCKED: cannot modify Belay's own scripts, config, or harness hook wiring. To turn guards off, run this yourself in a terminal: $(belay_home)/guard-toggle.sh off"
         fi
       fi
     done
     for sn in "${SELF_PROTECT_NAMES[@]}"; do
-      if echo "$SELF_CHECK" | grep -qE "(^|[/[:space:]'\"])$(echo "$sn" | sed 's/\./\\./g')([[:space:]]|$|['\"])"; then
+      sn_re="(^|[/[:space:]'\"])$(_ere_escape "$sn")([[:space:]]|$|['\"])"
+      if [[ "$SELF_CHECK" =~ $sn_re ]]; then
         deny "BLOCKED: cannot modify Belay's own scripts, config, or harness hook wiring. To turn guards off, run this yourself in a terminal: $(belay_home)/guard-toggle.sh off"
       fi
     done
@@ -375,7 +440,7 @@ if [ -f "$CUSTOM_LIST" ]; then
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
     line="${line/\$HOME/$HOME_DIR}"
-    if echo "$CHECK_STRING" | grep -qF "$line"; then
+    if [[ "$CHECK_STRING" == *"$line"* ]]; then
       deny "BLOCKED: access to sensitive path matching '$line'. This contains credentials, messages, browser sessions, or system secrets. Ask the user to provide this data manually if needed."
     fi
   done < "$CUSTOM_LIST"
@@ -386,11 +451,14 @@ fi
 # only block home directory .env files. Otherwise block all .env files.
 if category_enabled "credentials"; then
   GUARD_DIR="${BELAY_INSTALL_DIR:-$(belay_home)}"
-  if echo "$CHECK_STRING" | grep -qE '\.env($|[^a-zA-Z])'; then
-    if ! echo "$CHECK_STRING" | grep -qF '.venv'; then
+  _env_re='\.env($|[^a-zA-Z])'
+  if [[ "$CHECK_STRING" =~ $_env_re ]]; then
+    if [[ "$CHECK_STRING" != *".venv"* ]]; then
       if [ -f "$GUARD_DIR/.env-project-allowed" ]; then
         # Scoped mode: only block home directory .env files
-        if echo "$CHECK_STRING" | grep -qE "^$HOME_DIR/\.[^/]*env" || echo "$CHECK_STRING" | grep -qE "cat.*$HOME_DIR/\.[^/]*env"; then
+        _home_env_re="^$(_ere_escape "$HOME_DIR")/\\.[^/]*env"
+        _cat_env_re="cat.*$(_ere_escape "$HOME_DIR")/\\.[^/]*env"
+        if [[ "$CHECK_STRING" =~ $_home_env_re || "$CHECK_STRING" =~ $_cat_env_re ]]; then
           deny "BLOCKED: home directory .env files may contain production secrets. Project .env files are allowed."
         fi
       else
