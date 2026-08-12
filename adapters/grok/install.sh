@@ -10,6 +10,16 @@ mkdir -p "$HOOK_DIR"
 PRETOOL="$ROOT/adapters/grok/pretool.sh"
 chmod +x "$PRETOOL" "$ROOT/core/"*.sh "$ROOT/belay.sh" "$ROOT/guards/"*.sh 2>/dev/null || true
 
+# Drop pre-rename leftovers. Grok loads every *.json in hooks/; a stale
+# agent-guard/claude-guard entry that points at a deleted path fails every
+# PreToolUse even when belay.json is healthy.
+for stale in agent-guard.json claude-guard.json; do
+  if [ -f "$HOOK_DIR/$stale" ]; then
+    rm -f "$HOOK_DIR/$stale"
+    echo "Removed stale hook: $HOOK_DIR/$stale"
+  fi
+done
+
 # Write hooks file with absolute command path
 jq -n \
   --arg cmd "$PRETOOL" \
