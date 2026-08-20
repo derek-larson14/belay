@@ -90,8 +90,20 @@ echo "Scripts copied to $INSTALL_DIR"
 
 # --- Apply configuration markers ---
 if [ "$ENV_PROJECT_ALLOWED" = true ]; then
+  # First-class config is the source of truth. The marker is a legacy alias
+  # so older path-guard copies still honor the setup choice.
+  cfg="$INSTALL_DIR/config.toml"
+  if grep -qE '^[[:space:]]*env_files[[:space:]]*=' "$cfg" 2>/dev/null; then
+    sed -i '' 's/^[[:space:]]*env_files[[:space:]]*=.*/env_files = "project"/' "$cfg"
+  elif grep -q '^\[path-guard\]' "$cfg" 2>/dev/null; then
+    sed -i '' '/^\[path-guard\]/a\
+env_files = "project"
+' "$cfg"
+  else
+    printf '\n[path-guard]\nenv_files = "project"\n' >> "$cfg"
+  fi
   touch "$INSTALL_DIR/.env-project-allowed"
-  echo "Created .env-project-allowed marker"
+  echo "Set env_files = \"project\" (legacy marker also written)"
 fi
 
 if [ "$BLOCK_OSASCRIPT" = true ]; then

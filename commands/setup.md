@@ -53,9 +53,9 @@ Ask these one at a time using AskUserQuestion. Collect flags for setup.sh.
 - Yes → no flag
 - No → add `--sqlite-deny`
 
-**Question 2:** "Does your project have .env files Claude should be able to read? (If yes, we'll only block .env in your home directory)"
-- Yes → add `--env-project-allowed`
-- No → no flag
+**Question 2:** "Should the agent be able to READ project .env files? Contents enter the model. Processes can always load .env without the agent reading them."
+- No, just let processes load them (Recommended) → no flag (`env_files = "block"`)
+- Yes, read project .env; still block `$HOME/.env` → add `--env-project-allowed`
 
 **Question 3:** "Do you use AppleScript/osascript for automation (Reminders, Calendar, Finder, etc.)?"
 - Yes → no flag

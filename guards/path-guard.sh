@@ -8,8 +8,8 @@
 # Missing categories default to ON — you must explicitly disable them.
 #
 # Philosophy: these are paths no AI agent should ever need to access.
-# If you actually need something from one of these paths, copy the data
-# to your working directory first (manually), then let the agent read it there.
+# .env files are the exception: processes may load them, but dumping
+# contents into the model is blocked unless env_files allows it.
 
 INPUT=$(cat)
 
@@ -47,6 +47,11 @@ esac
 CHECK_STRING="${CHECK_STRING//\$\{HOME\}/$HOME}"
 CHECK_STRING="${CHECK_STRING//\$HOME/$HOME}"
 CHECK_STRING="${CHECK_STRING//\~\//$HOME/}"
+
+# Original bash command, before we append cwd and resolved targets.
+# Dump-vs-load uses this so `source .env && npm test` is a load, not a dump.
+BASH_CMD=""
+[ "$TOOL_NAME" = "Bash" ] && BASH_CMD="$CHECK_STRING"
 
 # Resolve relative paths against the session's working directory — the approach
 # pi-guardrails uses. Without it, an agent already sitting inside a sensitive
@@ -98,14 +103,15 @@ $BASH_TARGETS"
     ;;
 esac
 
-# For Bash: git commands don't access file contents — commit messages, tag messages,
-# and log output can mention sensitive paths without it being a real file access.
-# Skip all path checks for git operations to avoid false positives.
-# In-process regex: grep-per-check was the bulk of PreToolUse latency.
+# For Bash: git commands don't access file contents — commit messages, tag
+# messages, and log output can mention sensitive paths without it being a
+# real file access. Skip named path categories for git to avoid those false
+# positives. Dotenv dump checks still run (`git show .env` is a dump).
+GIT_SKIP_PATHS=false
 if [ "$TOOL_NAME" = "Bash" ]; then
   _git_re='^[[:space:]]*git([^[:alnum:]_]|$)'
   if [[ "$CHECK_STRING" =~ $_git_re ]]; then
-    exit 0
+    GIT_SKIP_PATHS=true
   fi
 fi
 
@@ -184,7 +190,7 @@ _has_path_component() {
 }
 
 # Escape an ERE so it can be interpolated into [[ =~ ]] without a sed process.
-# Only used off the allow-path hot path (self-protect / scoped .env).
+# Only used off the allow-path hot path (self-protect).
 _ere_escape() {
   local s="$1" i c out=""
   for (( i = 0; i < ${#s}; i++ )); do
@@ -197,7 +203,136 @@ _ere_escape() {
   printf '%s' "$out"
 }
 
+# Secret dotenv filenames: `.env` and `.env.<x>`. Templates (`.env.example`)
+# and unrelated names (`.env-project-allowed`, `.environment`, `.venv`) are not.
+_is_secret_dotenv_basename() {
+  local base="$1"
+  case "$base" in
+    .env) return 0 ;;
+    .env.example|.env.sample|.env.template) return 1 ;;
+    .env.example.*|.env.sample.*|.env.template.*) return 1 ;;
+    .env.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_path_is_secret_dotenv() {
+  local p="$1"
+  p="${p%/}"
+  [ -n "$p" ] || return 1
+  _is_secret_dotenv_basename "${p##*/}"
+}
+
+_is_home_root_dotenv() {
+  local p="$1"
+  p="${p%/}"
+  case "$p" in
+    "$HOME_DIR"/.env|"$HOME_DIR"/.env.*)
+      _is_secret_dotenv_basename "${p##*/}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+_resolve_maybe_rel() {
+  local tok="$1"
+  tok="${tok/#\~\//$HOME_DIR/}"
+  case "$tok" in
+    /*) printf '%s' "$tok" ;;
+    *) printf '%s' "${SESSION_CWD:-$PWD}/${tok#./}" ;;
+  esac
+}
+
+# True if this dotenv path should be blocked under the current mode.
+_dotenv_path_blocked() {
+  local p="$1"
+  _path_is_secret_dotenv "$p" || return 1
+  case "$DOTENV_MODE" in
+    allow) return 1 ;;
+    project) _is_home_root_dotenv "$p" ;;
+    *) return 0 ;;
+  esac
+}
+
+_is_dump_command() {
+  local cmd="$1" re
+  re='(^|[[:space:];|&])(cat|head|tail|less|more|bat|batcat|nl|od|xxd|hexdump|strings|grep|egrep|fgrep|rg|ag|ack|sed|awk|cut|tee|cp|mv)([[:space:]]|$)'
+  [[ "$cmd" =~ $re ]] && return 0
+  re='(^|[[:space:];|&])git[[:space:]]+(show|diff|grep|blame|cat-file)([[:space:]]|$)'
+  [[ "$cmd" =~ $re ]]
+}
+
+# `echo KEY=x > .env` is a write/dump even though echo itself is not a dumper.
+_segment_redirects_blocked_dotenv() {
+  local seg="$1" rest tok resolved
+  local re='(>>|&>|>)[[:space:]]*['\''"]?([^'\''"[:space:]]+)'
+  local n=0
+  rest="$seg"
+  while [[ "$rest" =~ $re ]]; do
+    n=$((n+1))
+    [ "$n" -gt 8 ] && break
+    tok="${BASH_REMATCH[2]}"
+    if _path_is_secret_dotenv "$tok"; then
+      resolved=$(_resolve_maybe_rel "$tok")
+      _dotenv_path_blocked "$resolved" && return 0
+    fi
+    rest="${rest#*"${BASH_REMATCH[0]}"}"
+  done
+  return 1
+}
+
+# True if a bash command dumps a blocked dotenv file into the model.
+# Per-pipeline-segment: `sed -i s/a/b/ src.js && npm --env-file .env` is a load.
+_bash_dumps_blocked_dotenv() {
+  local cmd="$1" segs seg tok tmp resolved re
+  cmd="${cmd%%<<*}"
+  segs="$cmd"
+  segs="${segs//&&/$'\n'}"
+  segs="${segs//||/$'\n'}"
+  segs="${segs//|/$'\n'}"
+  segs="${segs//;/$'\n'}"
+  segs="${segs//&/$'\n'}"
+  re="(open|read_text|readFileSync|readFile|Path)\\(['\"]([^'\"]+)['\"]"
+  while IFS= read -r seg || [ -n "$seg" ]; do
+    [ -z "$seg" ] && continue
+    _segment_redirects_blocked_dotenv "$seg" && return 0
+    if [[ "$seg" =~ $re ]]; then
+      tok="${BASH_REMATCH[2]}"
+      if _path_is_secret_dotenv "$tok"; then
+        resolved=$(_resolve_maybe_rel "$tok")
+        _dotenv_path_blocked "$resolved" && return 0
+      fi
+    fi
+    _is_dump_command "$seg" || continue
+    tmp="$seg"
+    tmp="${tmp//>/ }"
+    tmp="${tmp//</ }"
+    tmp="${tmp//\`/ }"
+    for tok in $tmp; do
+      tok="${tok%\"}"; tok="${tok#\"}"
+      tok="${tok%\'}"; tok="${tok#\'}"
+      [ -z "$tok" ] && continue
+      case "$tok" in -*) continue ;; esac
+      _path_is_secret_dotenv "$tok" || continue
+      resolved=$(_resolve_maybe_rel "$tok")
+      if _dotenv_path_blocked "$resolved"; then
+        return 0
+      fi
+    done
+  done <<< "$segs"
+  return 1
+}
+
+_dotenv_deny_reason() {
+  if [ "$DOTENV_MODE" = "project" ]; then
+    echo "BLOCKED: home directory .env files may contain production secrets. Project .env files are allowed."
+  else
+    echo "BLOCKED: reading .env files dumps credentials into the model. Let the process load them, or set path-guard.env_files = \"project\" to allow reading project .env files."
+  fi
+}
+
 check_patterns() {
+  [ "${GIT_SKIP_PATHS:-false}" = true ] && return 0
   local category="$1"
   shift
   local pattern rel
@@ -446,27 +581,29 @@ if [ -f "$CUSTOM_LIST" ]; then
   done < "$CUSTOM_LIST"
 fi
 
-# Block .env file reads — scoped based on setup preferences.
-# If .env-project-allowed marker exists (user said yes to project .env access during setup),
-# only block home directory .env files. Otherwise block all .env files.
-if category_enabled "credentials"; then
-  GUARD_DIR="${BELAY_INSTALL_DIR:-$(belay_home)}"
-  _env_re='\.env($|[^a-zA-Z])'
-  if [[ "$CHECK_STRING" =~ $_env_re ]]; then
-    if [[ "$CHECK_STRING" != *".venv"* ]]; then
-      if [ -f "$GUARD_DIR/.env-project-allowed" ]; then
-        # Scoped mode: only block home directory .env files
-        _home_env_re="^$(_ere_escape "$HOME_DIR")/\\.[^/]*env"
-        _cat_env_re="cat.*$(_ere_escape "$HOME_DIR")/\\.[^/]*env"
-        if [[ "$CHECK_STRING" =~ $_home_env_re || "$CHECK_STRING" =~ $_cat_env_re ]]; then
-          deny "BLOCKED: home directory .env files may contain production secrets. Project .env files are allowed."
-        fi
-      else
-        # Default: block all .env files
-        deny "BLOCKED: .env files may contain credentials. Ask the user to provide specific values instead."
+# === .env files ===
+# Independent of the credentials category.
+#   block   (default) — deny dumping contents into the model; processes may load them
+#   project           — same, except project .env files may be read
+#   allow             — no dotenv restrictions
+# Glob is filenames only, so it is not a dump.
+
+belay_env_files_mode >/dev/null
+DOTENV_MODE="$BELAY_CONFIG_VAL"
+
+if [ "$DOTENV_MODE" != "allow" ] && [ "$TOOL_NAME" != "Glob" ]; then
+  case "$TOOL_NAME" in
+    Read|Edit|Write|Grep)
+      if _dotenv_path_blocked "$CHECK_STRING"; then
+        deny "$(_dotenv_deny_reason)"
       fi
-    fi
-  fi
+      ;;
+    Bash)
+      if _bash_dumps_blocked_dotenv "$BASH_CMD"; then
+        deny "$(_dotenv_deny_reason)"
+      fi
+      ;;
+  esac
 fi
 
 # Allow everything else

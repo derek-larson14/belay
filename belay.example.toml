@@ -15,12 +15,20 @@
 [path-guard]
 enabled = true
 # Blocks reads to credentials, messages, browser sessions, keychains,
-# clipboard access, shell history, and .env files.
+# clipboard access, and shell history.
 # See guards/path-guard.sh for the full blocklist.
 # Toggle individual categories below. All default to ON if omitted.
+#
+# .env files are separate from credentials. Processes may always load them.
+# Dumping contents into the model (Read, cat, grep) follows env_files:
+#   "block"   — deny every .env dump (default)
+#   "project" — allow project .env dumps; still block $HOME/.env
+#   "allow"   — no dotenv restrictions
+# Legacy: a ~/.belay/.env-project-allowed marker is treated as "project".
+env_files = "block"
 
 [path-guard.categories]
-credentials = true         # SSH, AWS, API tokens, .env, Docker/K8s config
+credentials = true         # SSH, AWS, API tokens, Docker/K8s config
 browser-sessions = true    # Chrome, Arc, Firefox, Safari, Brave, Edge, Dia
 messages = true            # iMessage, Mail, Signal
 keychains = true           # macOS Keychains, Accounts, security CLI commands

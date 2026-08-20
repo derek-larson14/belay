@@ -150,6 +150,9 @@ BELAY_PATH_CAT_CLIPBOARD=off
 BELAY_PATH_CAT_BROWSER_SESSIONS=off
 # Also: messages, keychains, password-managers,
 #   system-data, shell-history, claude-internals, browser-hijacking
+
+# .env dumps (Read/cat/grep). Processes may always load them.
+BELAY_ENV_FILES=project   # block | project | allow
 ```
 
 ## Commands
@@ -174,7 +177,9 @@ Claude Code slash commands:
 
 ## What it blocks
 
-**Credentials** — SSH keys, AWS creds, API tokens, .env files, Docker/Kubernetes config
+**Credentials** — SSH keys, AWS creds, API tokens, Docker/Kubernetes config
+
+**.env files** — dumping contents into the model (Read, cat, grep). Processes may load them (`source .env && npm test`, `python app.py`). `block` (default) denies every dump; `project` allows project `.env` dumps and still blocks `$HOME/.env`; `allow` turns the check off. Templates (`.env.example`) are never blocked.
 
 **Browser sessions** — Cookies and local storage for Chrome, Arc, Firefox, Safari, Brave, Edge, Dia
 
@@ -209,6 +214,7 @@ With no config you get path + write guards on; network and workspace are opt-in.
 ```toml
 [path-guard]
 enabled = true
+env_files = "block"  # "block" | "project" | "allow"
 
 [path-guard.categories]
 credentials = true
@@ -272,9 +278,9 @@ Workspace guard covers file tools (Read/Write/Edit/Grep/Glob), not the shell. Us
 ```bash
 cd /path/to/belay
 ./belay test
-./core/test-normalize.sh
-./adapters/pi/test-bridge.sh
 ```
+
+Runs the guard suite, normalize/dispatch, and the Pi bridge.
 
 ## Contributing
 

@@ -75,6 +75,18 @@ check "SSH deny reason mentions sensitive" "sensitive|BLOCKED|ssh" "$OUT"
 OUT=$(bridge read '{"path":"/project/.env"}')
 check_block "blocks .env file read" "$OUT"
 
+OUT=$(bridge bash '{"command":"source .env && npm test"}')
+check_empty "allows process load of .env" "$OUT"
+
+OUT=$(bridge bash '{"command":"cat .env"}')
+check_block "blocks cat .env dump" "$OUT"
+
+OUT=$(bridge bash '{"command":"git show .env"}')
+check_block "blocks git show .env" "$OUT"
+
+OUT=$(bridge bash '{"command":"echo KEY=x > .env"}')
+check_block "blocks redirect into .env" "$OUT"
+
 OUT=$(bridge read "{\"path\":\"$BELAY_ROOT/README.md\"}")
 check_empty "allows normal file read" "$OUT"
 

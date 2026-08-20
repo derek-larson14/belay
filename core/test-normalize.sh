@@ -76,6 +76,35 @@ else
   ((FAIL++)) || true
 fi
 
+set +e
+OUT=$(echo '{"toolName":"read_file","toolInput":{"target_file":"/project/.env"}}' | "$D")
+EC=$?
+set -e
+check_jq "Grok denies Read of .env" '.decision=="deny"' "$OUT"
+if [ "$EC" = "2" ]; then
+  echo "  PASS: Grok .env dump exit 2"
+  ((PASS++)) || true
+else
+  echo "  FAIL: Grok .env dump exit (got $EC)"
+  ((FAIL++)) || true
+fi
+
+OUT=$(echo '{"toolName":"run_terminal_command","toolInput":{"command":"source .env && npm test"}}' | "$D")
+check_jq "Grok allows process load of .env" '.decision=="allow"' "$OUT"
+
+set +e
+OUT=$(echo '{"toolName":"run_terminal_command","toolInput":{"command":"cat .env"}}' | "$D")
+EC=$?
+set -e
+check_jq "Grok denies cat .env" '.decision=="deny"' "$OUT"
+if [ "$EC" = "2" ]; then
+  echo "  PASS: Grok cat .env exit 2"
+  ((PASS++)) || true
+else
+  echo "  FAIL: Grok cat .env exit (got $EC)"
+  ((FAIL++)) || true
+fi
+
 echo "=== dispatch (Pi response) ==="
 export BELAY_HARNESS=pi
 OUT=$(echo '{"toolName":"bash","input":{"command":"pbpaste"}}' | "$D")

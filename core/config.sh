@@ -149,3 +149,54 @@ belay_active_configs() {
   [ -f "$g" ] && echo "global:  $g"
   return 0
 }
+
+# --- dotenv policy: block | project | allow ---
+# Env BELAY_ENV_FILES > toml path-guard.env_files > legacy marker file > block.
+# Independent of [path-guard.categories] credentials.
+# Sets BELAY_CONFIG_VAL and prints it (do not wrap in $() on the hot path).
+belay_env_files_mode() {
+  case "${BELAY_ENV_FILES:-}" in
+    block|project|allow)
+      BELAY_CONFIG_VAL="$BELAY_ENV_FILES"
+      echo "$BELAY_CONFIG_VAL"
+      return
+      ;;
+  esac
+
+  _belay_load_cfg
+  local v=""
+  if _belay_blob_get "$_BELAY_CFG_PROJ" "path-guard" "env_files"; then
+    v="$BELAY_BLOB_VAL"
+  elif _belay_blob_get "$_BELAY_CFG_GLOB" "path-guard" "env_files"; then
+    v="$BELAY_BLOB_VAL"
+  fi
+  case "$v" in
+    block|project|allow)
+      BELAY_CONFIG_VAL="$v"
+      echo "$BELAY_CONFIG_VAL"
+      return
+      ;;
+  esac
+
+  if [ -f "$(belay_home)/.env-project-allowed" ]; then
+    BELAY_CONFIG_VAL="project"
+    echo "$BELAY_CONFIG_VAL"
+    return
+  fi
+
+  BELAY_CONFIG_VAL="block"
+  echo "$BELAY_CONFIG_VAL"
+}
+
+belay_env_files_source() {
+  case "${BELAY_ENV_FILES:-}" in
+    block|project|allow) echo "env BELAY_ENV_FILES"; return ;;
+  esac
+  local proj glob
+  proj="$(belay_project_dir)/.belay.toml"
+  glob="$(belay_home)/config.toml"
+  if [ -n "$(_belay_toml_get "$proj" "path-guard" "env_files")" ]; then echo "project"; return; fi
+  if [ -n "$(_belay_toml_get "$glob" "path-guard" "env_files")" ]; then echo "global"; return; fi
+  if [ -f "$(belay_home)/.env-project-allowed" ]; then echo "legacy marker"; return; fi
+  echo "default"
+}

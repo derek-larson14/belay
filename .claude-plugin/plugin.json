@@ -1,6 +1,6 @@
 {
   "name": "belay",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Hard limits for coding agents \u2014 block credential theft, network exfiltration, and persistence attacks across Claude Code, Pi, and Grok Build",
   "author": {
     "name": "derek-larson14"

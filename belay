@@ -242,6 +242,12 @@ cmd_status() {
   echo ""
   echo "${BOLD}Guards${OFF}"
   guard_row "path-guard" true
+  local env_mode env_src env_color
+  env_mode="$(belay_env_files_mode)"
+  env_src="$(belay_env_files_source)"
+  env_color="$GREEN"
+  [ "$env_mode" = "allow" ] && env_color="$YEL"
+  printf "  %-17s %s%-8s%s %s(%s)%s\n" "env-files" "$env_color" "$env_mode" "$OFF" "$DIM" "$env_src" "$OFF"
   guard_row "write-guard" true
   guard_row "workspace-guard" false
   guard_row "network-guard" false
@@ -264,7 +270,15 @@ cmd_log() {
   tail -n "$n" "$p"
 }
 
-cmd_test() { "$ROOT/test-guards.sh"; }
+cmd_test() {
+  local fail=0
+  "$ROOT/test-guards.sh" || fail=1
+  echo ""
+  "$ROOT/core/test-normalize.sh" || fail=1
+  echo ""
+  "$ROOT/adapters/pi/test-bridge.sh" || fail=1
+  return "$fail"
+}
 
 usage() {
   cat <<'USAGE'
@@ -276,7 +290,7 @@ belay — hard limits for coding agents
   belay off  [harness|all]             unwire (scripts and config stay put)
   belay uninstall [--purge]            unwire everything + drop our deny rules
   belay log  [N]                       last N audit entries (default 20)
-  belay test                           run the guard suite
+  belay test                           run guards, normalize/dispatch, and Pi bridge suites
 
 belay on/off touch only Belay's own hook entries. Other hooks stay put.
 

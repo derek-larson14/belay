@@ -98,6 +98,168 @@ check_empty "allows .venv directories" "$OUT"
 OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"update env file handling\""}}' | "$GUARD")
 check_empty "allows git commands (no false positives on messages)" "$OUT"
 
+# --- dotenv dump vs load ---
+echo "--- dotenv dump vs load ---"
+
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env.example"}}' | "$GUARD")
+check_empty "allows .env.example (template, not a secret)" "$OUT"
+
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.belay/.env-project-allowed"}}' | "$GUARD")
+check_empty "allows marker filename (not a dotenv file)" "$OUT"
+
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.environment"}}' | "$GUARD")
+check_empty "allows .environment (not a dotenv file)" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"source .env && npm test"},"cwd":"/project"}' | "$GUARD")
+check_empty "allows process load: source .env && npm test" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"python app.py --env-file .env"},"cwd":"/project"}' | "$GUARD")
+check_empty "allows process load: python --env-file .env" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"docker run --env-file .env image"},"cwd":"/project"}' | "$GUARD")
+check_empty "allows process load: docker --env-file" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"sed -i s/foo/bar/ src.js && npm test -- --env-file .env"},"cwd":"/project"}' | "$GUARD")
+check_empty "allows load in a later pipeline segment" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks cat .env (dump)" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"head -n 5 .env.local"},"cwd":"/project"}' | "$GUARD")
+check "blocks head .env.local (dump)" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"rg API_KEY .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks rg of .env (dump)" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"python -c \"print(open('"'"'.env'"'"').read())\""},"cwd":"/project"}' | "$GUARD")
+check "blocks python open(.env) one-liner" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"ls '"$HOME"'/.belay/.env-project-allowed"}}' | "$GUARD")
+check_empty "allows ls of marker file" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"python3 - <<'"'"'PY'"'"'\nprint(\".env\")\nPY"}}' | "$GUARD")
+check_empty "allows heredoc that only mentions .env" "$OUT"
+
+OUT=$(echo '{"tool_name":"Glob","tool_input":{"path":"/project","pattern":".env"}}' | "$GUARD")
+check_empty "allows Glob of .env (filenames, not contents)" "$OUT"
+
+OUT=$(echo '{"tool_name":"Edit","tool_input":{"file_path":"/project/.env","old_string":"A=1","new_string":"A=2"}}' | "$GUARD")
+check "blocks Edit of .env in block mode" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Write","tool_input":{"file_path":"/project/.env","content":"A=1"}}' | "$GUARD")
+check "blocks Write of .env in block mode" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Grep","tool_input":{"path":"/project/.env","pattern":"KEY"}}' | "$GUARD")
+check "blocks Grep of .env file" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Grep","tool_input":{"path":"/project","pattern":"KEY"}}' | "$GUARD")
+check_empty "allows Grep of a project directory" "$OUT"
+
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env.production"}}' | "$GUARD")
+check "blocks Read of .env.production" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env.example.local"}}' | "$GUARD")
+check_empty "allows .env.example.local (template)" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"echo KEY=x > .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks redirect into .env" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"echo KEY=x >> .env.local"},"cwd":"/project"}' | "$GUARD")
+check "blocks append redirect into .env.local" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"echo KEY=x | tee .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks tee into .env" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cp .env /tmp/out"},"cwd":"/project"}' | "$GUARD")
+check "blocks cp of .env (copy-out bypass)" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"command cat .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks command cat .env" "BLOCKED" "$OUT"
+
+OUT=$(jq -n --arg cmd "python -c 'print(open(\".env\").read())'" --arg cwd "/project" \
+  '{tool_name:"Bash",tool_input:{command:$cmd},cwd:$cwd}' | "$GUARD")
+check "blocks python open(\".env\") double-quoted" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git show .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks git show .env (dump via git)" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git diff HEAD -- .env"},"cwd":"/project"}' | "$GUARD")
+check "blocks git diff of .env" "BLOCKED" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"add .env support\""},"cwd":"/project"}' | "$GUARD")
+check_empty "allows git commit message that mentions .env" "$OUT"
+
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git add .env"},"cwd":"/project"}' | "$GUARD")
+check_empty "allows git add .env (does not dump contents)" "$OUT"
+
+export BELAY_ENV_FILES=yes
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env"}}' | "$GUARD")
+check "invalid BELAY_ENV_FILES value falls back to block" "BLOCKED" "$OUT"
+unset BELAY_ENV_FILES
+
+# credentials off must not disable dotenv (it is its own policy)
+export BELAY_PATH_CAT_CREDENTIALS=off
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env"}}' | "$GUARD")
+check "credentials=off still blocks .env dump" "BLOCKED" "$OUT"
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.ssh/id_rsa"}}' | "$GUARD")
+check_empty "credentials=off allows SSH key read" "$OUT"
+unset BELAY_PATH_CAT_CREDENTIALS
+
+export BELAY_ENV_FILES=project
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env"}}' | "$GUARD")
+check_empty "env_files=project allows reading project .env" "$OUT"
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat .env"},"cwd":"/project"}' | "$GUARD")
+check_empty "env_files=project allows cat of project .env" "$OUT"
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.env"}}' | "$GUARD")
+check "env_files=project still blocks home .env" "BLOCKED" "$OUT"
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat '"$HOME"'/.env"}}' | "$GUARD")
+check "env_files=project still blocks cat of home .env" "BLOCKED" "$OUT"
+unset BELAY_ENV_FILES
+
+export BELAY_ENV_FILES=allow
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.env"}}' | "$GUARD")
+check_empty "env_files=allow allows reading home .env" "$OUT"
+unset BELAY_ENV_FILES
+
+# Legacy marker file is treated as project when toml does not set env_files
+TMPHOME=$(mktemp -d)
+export BELAY_HOME="$TMPHOME"
+touch "$TMPHOME/.env-project-allowed"
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env"}}' | "$GUARD")
+check_empty "legacy marker: project .env allowed" "$OUT"
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.env"}}' | "$GUARD")
+check "legacy marker: home .env still blocked" "BLOCKED" "$OUT"
+unset BELAY_HOME
+rm -rf "$TMPHOME"
+
+# toml path-guard.env_files, including project overlay
+TMPHOME=$(mktemp -d)
+TMPPROJ=$(mktemp -d)
+export BELAY_HOME="$TMPHOME"
+export BELAY_PROJECT_DIR="$TMPPROJ"
+cat > "$TMPHOME/config.toml" << 'TOML'
+[path-guard]
+env_files = "block"
+TOML
+cat > "$TMPPROJ/.belay.toml" << 'TOML'
+[path-guard]
+env_files = "project"
+TOML
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"/project/.env"}}' | "$GUARD")
+check_empty "project toml env_files=project allows project .env" "$OUT"
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.env"}}' | "$GUARD")
+check "project toml env_files=project still blocks home .env" "BLOCKED" "$OUT"
+rm -f "$TMPPROJ/.belay.toml"
+cat > "$TMPHOME/config.toml" << 'TOML'
+[path-guard]
+env_files = "allow"
+TOML
+OUT=$(echo '{"tool_name":"Read","tool_input":{"file_path":"'"$HOME"'/.env"}}' | "$GUARD")
+check_empty "global toml env_files=allow allows home .env" "$OUT"
+unset BELAY_PROJECT_DIR
+unset BELAY_HOME
+rm -rf "$TMPHOME" "$TMPPROJ"
+
 # --- write-guard ---
 echo "--- write-guard ---"
 export BELAY_ALLOW_PERSISTENCE=off  # force-disable for persistence tests
